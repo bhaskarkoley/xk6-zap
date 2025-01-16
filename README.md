@@ -3,7 +3,7 @@
 This is a [k6](https://github.com/grafana/k6) extension using the
 [xk6](https://github.com/grafana/xk6) system.
 
-Support logging to file.
+Support logging to console only in json format.
 
 
 ## Build
@@ -35,8 +35,6 @@ Then:
 // script.js
 import zaplogger from 'k6/x/zaplogger';
 import { sleep } from 'k6';
-//如果要所有VU写入一个文件，建议这里先加一个infow。测试过程发现如果这个test.log不存在的话，并发写入同个文件有出现文件被进程占用的风险，导致写入不全。
-//这里是属于k6生命周期的初始化阶段。
 const mylogger = zaplogger.initLogger("./test.log")
 mylogger.infow("msg", "key1", `start`)
 export default function () { 
@@ -44,13 +42,6 @@ export default function () {
   mylogger.infow("key", "gagga", "key1", "values1")
   sleep(5)
   }
-//如果不同VU写入不同文件，建议把mylogger写入到各自的场景里。比如这个例子，这样子就没有任何问题。
-// export default function () { 
-//  const mylogger = zaplogger.initLogger("./test" +`${exec.vu.idInTest}` +".log")
-//   mylogger.infow("msg", "key", "gagga")
-//   mylogger.infow("key", "gagga", "key1", "values1")
-//   sleep(5)
-//   }
 export function teardown() {
   mylogger.sync()
 }
@@ -93,5 +84,3 @@ Then you can see that a file is generated locally
 ```
 
 
-## TUDO
-- [ ] 文件不存在的时候，并发写入有问题；文件如果已经存在了，就没问题。奇怪
