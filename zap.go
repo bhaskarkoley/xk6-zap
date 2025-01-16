@@ -4,7 +4,7 @@ import (
 	"go.k6.io/k6/js/modules"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"gopkg.in/natefinch/lumberjack.v2"
+	"os"
 )
 
 // init is called by the Go runtime at application startup.
@@ -46,36 +46,33 @@ func (*RootModule) NewModuleInstance(vu modules.VU) modules.Instance {
 func (zaplogger *ZapLogger) Exports() modules.Exports {
 	return modules.Exports{Default: zaplogger}
 }
-func (z *ZapLogger) InitLogger(path string, args ...int) *zap.SugaredLogger {
-	// MaxSize:    500, // megabytes
-	// MaxBackups: 3,
-	// MaxAge:     28, // days
-	defaultArgs := []int{500, 3, 28}
-	for i := len(args); i < len(defaultArgs); i++ {
-		args = append(args, defaultArgs[i])
-	}
-	writeSyncer := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   path,
-		MaxSize:    args[0],
-		MaxBackups: args[1],
-		MaxAge:     args[2],
-	})
-	encoder := getEncoder()
-	// core := zapcore.NewCore(encoder, safeW, zapcore.NewMultiWriteSyncer(writeSyncer, zapcore.AddSync(os.Stdout)), zapcore.DebugLevel)
-	//不在控制台输出，去掉zapcore.AddSync(os.Stdout)
-	core := zapcore.NewCore(encoder, zapcore.NewMultiWriteSyncer(writeSyncer), zapcore.DebugLevel)
 
-	logger := zap.New(core)
-	sugarLogger := logger.Sugar()
-	return sugarLogger
+// InitLogger initializes the JSON logger to log only to the console
+func (z *ZapLogger) InitLogger() *zap.SugaredLogger {
+	// Create a console write syncer for stdout
+	consoleSyncer := zapcore.AddSync(os.Stdout)
+
+	// JSON Encoder
+	encoder := getJSONEncoder()
+
+	// Core for console logging
+	consoleCore := zapcore.NewCore(encoder, consoleSyncer, zapcore.DebugLevel)
+
+	// Build the logger
+	logger := zap.New(consoleCore)
+	return logger.Sugar()
 }
-func getEncoder() zapcore.Encoder {
+
+// getJSONEncoder returns a JSON encoder for formatting logs
+func getJSONEncoder() zapcore.Encoder {
 	encoderConfig := zap.NewProductionEncoderConfig()
+	// Format timestamp in ISO8601 standard for readability
 	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
-	encoder := zapcore.NewJSONEncoder(encoderConfig)
-	return encoder
+	return zapcore.NewJSONEncoder(encoderConfig)
 }
+
+// CreateDynamicObject creates a dynamic log object with key-value pairs
 func (z *ZapLogger) CreateDynamicObject(args ...interface{}) DynamicObject {
 	obj := make(DynamicObject)
 	for i := 0; i < len(args); i += 2 {
@@ -84,6 +81,8 @@ func (z *ZapLogger) CreateDynamicObject(args ...interface{}) DynamicObject {
 	}
 	return obj
 }
+
+// ZapObject creates a zapcore.Field for structured logging
 func (z *ZapLogger) ZapObject(key string, args ...interface{}) zapcore.Field {
 	obj := make(DynamicObject)
 	for i := 0; i < len(args); i += 2 {
