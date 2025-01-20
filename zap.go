@@ -111,21 +111,16 @@ func (z *ZapLogger) AddMetricSamples(samples []metrics.SampleContainer) {
 func (z *ZapLogger) dynamicObjectFromSamples(samples []metrics.Sample) DynamicObject {
 	data := make(DynamicObject)
 	for _, sample := range samples {
-		data[sample.Metric.Name] = fmt.Sprintf("%v", sample.Value) // Store sample value with its metric name
+		data[sample.Metric.Name] = fmt.Sprintf("%v", sample.Value) // Store sample metric value
 
-		// Store sample time if it exists
+		// Include time if present
 		if sample.Time != (time.Time{}) {
 			data["time"] = sample.Time.Format(time.RFC3339Nano)
 		}
 
-		// Process sample tags if they are not nil
+		// Process tags using Map()
 		if sample.Tags != nil {
-			tags := make(map[string]string)
-			sample.Tags.Range(func(key, value string) bool { // Iterate over tags
-				tags[key] = value
-				return true
-			})
-			data["tags"] = tags // Add tags to the final data
+			data["tags"] = sample.Tags.Map() // Convert tags to a map
 		}
 	}
 	return data
