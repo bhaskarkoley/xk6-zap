@@ -49,6 +49,9 @@ func (r *RootModule) NewModuleInstance(vu modules.VU) modules.Instance {
 func (z *ZapLogger) Exports() modules.Exports {
 	return modules.Exports{
 		Default: z,
+		Named: map[string]interface{}{
+			"initLogger": InitLogger,
+		},
 	}
 }
 
