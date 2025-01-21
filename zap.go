@@ -1,130 +1,107 @@
 package zaplogger
 
 import (
-	"fmt"
 	"go.k6.io/k6/js/modules"
-	"go.k6.io/k6/metrics"
-	"go.k6.io/k6/output"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 	"os"
-	"time"
 )
 
-// DynamicObject is used for key-value pairs in JSON-like logs.
-type DynamicObject map[string]interface{}
+// init is called by the Go runtime at application startup.
+func init() {
+	modules.Register("k6/x/zaplogger", new(RootModule))
+}
 
-// RootModule is the entry point for the JS module.
 type RootModule struct{}
-
-// ZapLogger is the logger implementation.
 type ZapLogger struct {
-	vu      modules.VU         // Virtual User context
-	logger  *zap.SugaredLogger // Zap Logger instance
-	out     output.Params      // K6 Output params
-	metrics string             // String for metric information
+	vu modules.VU
 }
 
 var (
 	_ modules.Module   = &RootModule{}
 	_ modules.Instance = &ZapLogger{}
-	_ output.Output    = &ZapLogger{}
 )
 
-// Register module and output
-func init() {
-	modules.Register("k6/x/zaplogger", new(RootModule))
-	output.RegisterExtension("zaplogger", NewZapLogger)
-}
+type DynamicObject map[string]interface{}
 
-// Method for modules.Module implementation
-func (r *RootModule) NewModuleInstance(vu modules.VU) modules.Instance {
-	return &ZapLogger{
-		vu:     vu,
-		logger: InitLogger(),
+func (d DynamicObject) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	for k, v := range d {
+		switch v := v.(type) {
+		case int:
+			enc.AddInt(k, v)
+		case float64:
+			enc.AddFloat64(k, v)
+		case string:
+			enc.AddString(k, v)
+		default:
+			enc.AddReflected(k, v)
+		}
 	}
+	return nil
+}
+func (*RootModule) NewModuleInstance(vu modules.VU) modules.Instance {
+	return &ZapLogger{vu: vu}
 }
 
-// Method for modules.Instance implementation
-func (z *ZapLogger) Exports() modules.Exports {
-	return modules.Exports{
-		Default: z,
-		Named: map[string]interface{}{
-			"initLogger": InitLogger,
-		},
+func (zaplogger *ZapLogger) Exports() modules.Exports {
+	return modules.Exports{Default: zaplogger}
+}
+
+func (z *ZapLogger) InitLogger(path string, args ...int) *zap.SugaredLogger {
+	// Default parameters for Lumberjack log rotation
+	defaultArgs := []int{500, 3, 28} // MaxSize in MB, MaxBackups, MaxAge in days
+	for i := len(args); i < len(defaultArgs); i++ {
+		args = append(args, defaultArgs[i])
 	}
+
+	// Define the file writer using lumberjack
+	fileWriter := zapcore.AddSync(&lumberjack.Logger{
+		Filename:   path,
+		MaxSize:    args[0],
+		MaxBackups: args[1],
+		MaxAge:     args[2],
+	})
+
+	// Define the console writer (os.Stdout)
+	consoleWriter := zapcore.AddSync(os.Stdout)
+
+	// Combine file and console outputs into a MultiWriteSyncer
+	writeSyncer := zapcore.NewMultiWriteSyncer(fileWriter, consoleWriter)
+
+	// Get the JSON encoder configuration
+	encoder := getEncoder()
+
+	// Create a zapcore.Core that writes to both destinations
+	core := zapcore.NewCore(encoder, writeSyncer, zapcore.DebugLevel)
+
+	// Create the main zap logger and return the sugared logger
+	logger := zap.New(core)
+	sugarLogger := logger.Sugar()
+	return sugarLogger
 }
 
-// Method for output.Output implementation
-func (z *ZapLogger) Description() string {
-	return "ZapLogger: A custom logger using Uber Zap for K6."
-}
-
-// NewZapLogger initializes the logger output.
-func NewZapLogger(params output.Params) (output.Output, error) {
-	zapLogger := &ZapLogger{
-		logger: InitLogger(),
-		out:    params,
-	}
-	return zapLogger, nil
-}
-
-// InitLogger sets up the Zap logger with JSON encoding.
-func InitLogger() *zap.SugaredLogger {
-	consoleSyncer := zapcore.AddSync(os.Stdout)
-	encoder := getJSONEncoder()
-	consoleCore := zapcore.NewCore(encoder, consoleSyncer, zapcore.DebugLevel)
-	logger := zap.New(consoleCore)
-	return logger.Sugar()
-}
-
-// getJSONEncoder returns a JSON encoder for the logs.
-func getJSONEncoder() zapcore.Encoder {
+func getEncoder() zapcore.Encoder {
 	encoderConfig := zap.NewProductionEncoderConfig()
 	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
-	return zapcore.NewJSONEncoder(encoderConfig)
+	encoder := zapcore.NewJSONEncoder(encoderConfig)
+	return encoder
 }
 
-// Start initializes the logger output.
-func (z *ZapLogger) Start() error {
-	z.logger.Info("Zap Logger for K6 metrics started")
-	return nil
-}
-
-// Stop finalizes the output.
-func (z *ZapLogger) Stop() error {
-	z.logger.Sync()
-	z.logger.Info("Zap Logger stopped")
-	return nil
-}
-
-// AddMetricSamples logs metric samples.
-func (z *ZapLogger) AddMetricSamples(samples []metrics.SampleContainer) {
-	for _, sample := range samples {
-		all := sample.GetSamples()
-		logData := z.dynamicObjectFromSamples(all)
-		z.logger.Infow("Metric Sample",
-			"timestamp", all[0].GetTime().Format(time.RFC3339Nano),
-			"metricKeyValues", logData,
-		)
+func (z *ZapLogger) CreateDynamicObject(args ...interface{}) DynamicObject {
+	obj := make(DynamicObject)
+	for i := 0; i < len(args); i += 2 {
+		key, _ := args[i].(string)
+		obj[key] = args[i+1]
 	}
+	return obj
 }
-
-func (z *ZapLogger) dynamicObjectFromSamples(samples []metrics.Sample) DynamicObject {
-	data := make(DynamicObject)
-	for _, sample := range samples {
-		data[sample.Metric.Name] = fmt.Sprintf("%v", sample.Value) // Store sample metric value
-
-		// Include time if present
-		if sample.Time != (time.Time{}) {
-			data["time"] = sample.Time.Format(time.RFC3339Nano)
-		}
-
-		// Process tags using Map()
-		if sample.Tags != nil {
-			data["tags"] = sample.Tags.Map() // Convert tags to a map
-		}
+func (z *ZapLogger) ZapObject(key string, args ...interface{}) zapcore.Field {
+	obj := make(DynamicObject)
+	for i := 0; i < len(args); i += 2 {
+		key, _ := args[i].(string)
+		obj[key] = args[i+1]
 	}
-	return data
+	return zap.Object(key, obj)
 }
